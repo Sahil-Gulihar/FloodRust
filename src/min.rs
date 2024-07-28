@@ -8,34 +8,41 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Default)]
 struct PingStats {
     transmitted: u64,
-    received: u64,
+    recieved: u64,
     bytes_transferred: u64,
     time_ms: u64,
 }
 
 fn main() {
-    print!("Enter the URL: ");
+    print!("Enter the Link without 'https://' : ");
     io::stdout().flush().unwrap();
     let mut link_address = String::new();
-    io::stdin().read_line(&mut link_address).expect("Failed to read line");
+    io::stdin()
+        .read_line(&mut link_address)
+        .expect("Failed to read line");
     let link_address = link_address.trim().to_string();
 
-    print!("Enter duration in seconds: ");
+    print!("Enter the duration in seconds: ");
     io::stdout().flush().unwrap();
     let mut duration = String::new();
-    io::stdin().read_line(&mut duration).expect("Failed to read line");
-    let duration: u64 = duration.trim().parse().expect("Enter a valid number");
+    io::stdin()
+        .read_line(&mut duration)
+        .expect("Failed to read line");
+    let duration: u64 = duration
+        .trim()
+        .parse()
+        .expect("Please enter a valid number");
 
     let thread_count = num_cpus::get();
     println!("Using {} threads", thread_count);
 
-    let stop = Arc::new(AtomicBool::new(false));
-    let stats = Arc::new(Mutex::new(vec![PingStats::default(); thread_count]));
+    let stop_daddy = Arc::new(AtomicBool::new(false));
     let mut handles = vec![];
+    let stats = Arc::new(Mutex::new(vec![PingStats::default(); thread_count]));
 
     for i in 0..thread_count {
         let link = link_address.clone();
-        let stop_flag = Arc::clone(&stop);
+        let stop_flag = Arc::clone(&stop_daddy);
         let thread_stats = Arc::clone(&stats);
 
         let handle = thread::spawn(move || {
@@ -51,73 +58,71 @@ fn main() {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .expect("Failed to execute ping command");
+                .expect("Failed to execute command");
 
             let stdout = child.stdout.take().expect("Failed to capture stdout");
             let stderr = child.stderr.take().expect("Failed to capture stderr");
 
-            let read_output = BufReader::new(stdout);
-            let read_error = BufReader::new(stderr);
+            let output_read = BufReader::new(stdout);
+            let output_err = BufReader::new(stderr);
 
             let start_time = Instant::now();
 
             let output_stop = Arc::clone(&stop_flag);
             let output_stats = Arc::clone(&thread_stats);
-
-            let stdout_handle = thread::spawn(move || {
+            thread::spawn(move || {
                 println!("Thread {} stdout reader starting", i);
-                for line in read_output.lines() {
+                for line in output_read.lines() {
                     if let Ok(line) = line {
-                        println!("Thread {} received {}", i, line);
+                        println!("Thread {} received: {}", i, line);
                         let dot_count = line.chars().filter(|&c| c == '.').count() as u64;
                         if dot_count > 0 {
                             let mut stats = output_stats.lock().unwrap();
-                            stats[i].received += dot_count;
+                            stats[i].recieved += dot_count;
                             stats[i].bytes_transferred += dot_count * 1024;
                             println!(
                                 "Thread {} updated stats: received={}, bytes={}",
-                                i, stats[i].received, stats[i].bytes_transferred
+                                i, stats[i].recieved, stats[i].bytes_transferred
                             );
                         }
-                        if output_stop.load(Ordering::Relaxed) {
-                            break;
-                        }
+                    }
+                    if output_stop.load(Ordering::Relaxed) {
+                        break;
                     }
                 }
                 println!("Thread {} stdout reader finished", i);
             });
 
-            let stderr_stop = Arc::clone(&stop_flag);
-            let stderr_handle = thread::spawn(move || {
+            let flag_err = Arc::clone(&stop_flag);
+            thread::spawn(move || {
                 println!("Thread {} stderr reader starting", i);
-                for line in read_error.lines() {
+                for line in output_err.lines() {
                     if let Ok(line) = line {
                         eprintln!("Thread {} Error: {}", i, line);
                     }
-                    if stderr_stop.load(Ordering::Relaxed) {
+                    if flag_err.load(Ordering::Relaxed) {
                         break;
                     }
                 }
                 println!("Thread {} stderr reader finished", i);
             });
 
-            while !stop_flag.load(Ordering::Relaxed) && start_time.elapsed() < Duration::from_secs(duration) {
+            while !stop_flag.load(Ordering::Relaxed)
+                && start_time.elapsed() < Duration::from_secs(duration)
+            {
                 thread::sleep(Duration::from_millis(100));
             }
 
             child.kill().expect("Failed to kill the process");
             child.wait().expect("Failed to wait on child");
 
-            stdout_handle.join().expect("Failed to join stdout thread");
-            stderr_handle.join().expect("Failed to join stderr thread");
-
             let mut stats = thread_stats.lock().unwrap();
-            stats[i].transmitted = stats[i].received;
+            stats[i].transmitted = stats[i].recieved;
             stats[i].time_ms = start_time.elapsed().as_millis() as u64;
 
             println!(
                 "Thread {} finished. Final stats: transmitted={}, received={}, bytes={}",
-                i, stats[i].transmitted, stats[i].received, stats[i].bytes_transferred
+                i, stats[i].transmitted, stats[i].recieved, stats[i].bytes_transferred
             );
         });
 
@@ -125,7 +130,7 @@ fn main() {
     }
 
     thread::sleep(Duration::from_secs(duration));
-    stop.store(true, Ordering::Relaxed);
+    stop_daddy.store(true, Ordering::Relaxed);
 
     for handle in handles {
         handle.join().unwrap();
@@ -138,19 +143,18 @@ fn main() {
 
     for (i, stat) in final_stats.iter().enumerate() {
         println!("Thread {} statistics:", i);
-
-        let (packets_lost, loss_percentage) = if stat.transmitted >= stat.received {
+        let (packets_lost, loss_percentage) = if stat.transmitted >= stat.recieved {
             (
-                stat.transmitted - stat.received,
-                (stat.transmitted - stat.received) as f64 / stat.transmitted as f64 * 100.0,
+                stat.transmitted - stat.recieved,
+                (stat.transmitted - stat.recieved) as f64 / stat.transmitted as f64 * 100.0,
             )
         } else {
             (0, 0.0)
         };
 
         println!(
-            "Packets: Transmitted = {}, Received = {}, Lost = {} ({:.2}% loss)",
-            stat.transmitted, stat.received, packets_lost, loss_percentage
+            "  Packets: Transmitted = {}, Received = {}, Lost = {} ({:.2}% loss)",
+            stat.transmitted, stat.recieved, packets_lost, loss_percentage
         );
         println!(
             "  Bytes transferred: {} ({:.2} MB)",
@@ -168,23 +172,24 @@ fn main() {
         );
 
         total.transmitted += stat.transmitted;
-        total.received += stat.received;
+        total.recieved += stat.recieved;
         total.bytes_transferred += stat.bytes_transferred;
         total.time_ms = total.time_ms.max(stat.time_ms);
     }
 
     println!("\nTotal statistics:");
-    let (total_packets_lost, total_loss_percentage) = if total.transmitted >= total.received {
+    let (total_packets_lost, total_loss_percentage) = if total.transmitted >= total.recieved {
         (
-            total.transmitted - total.received,
-            (total.transmitted - total.received) as f64 / total.transmitted as f64 * 100.0,
+            total.transmitted - total.recieved,
+            (total.transmitted - total.recieved) as f64 / total.transmitted as f64 * 100.0,
         )
     } else {
         (0, 0.0)
     };
+
     println!(
         "  Packets: Transmitted = {}, Received = {}, Lost = {} ({:.2}% loss)",
-        total.transmitted, total.received, total_packets_lost, total_loss_percentage
+        total.transmitted, total.recieved, total_packets_lost, total_loss_percentage
     );
     println!(
         "  Bytes transferred: {} ({:.2} MB)",

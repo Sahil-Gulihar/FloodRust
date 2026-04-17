@@ -13,17 +13,29 @@ struct PingStats {
     time_ms: u64,
 }
 
+fn get_ping_args() -> Vec<&'static str> {
+    if cfg!(target_os = "macos") {
+        vec!["-c", "10000", "-i", "0.002", "-s", "1024"]
+    } else {
+        vec!["-6", "-f", "-i", "0.002", "-s", "1024"]
+    }
+}
+
 fn main() {
     print!("Enter the URL: ");
     io::stdout().flush().unwrap();
     let mut link_address = String::new();
-    io::stdin().read_line(&mut link_address).expect("Failed to read line");
+    io::stdin()
+        .read_line(&mut link_address)
+        .expect("Failed to read line");
     let link_address = link_address.trim().to_string();
 
     print!("Enter duration in seconds: ");
     io::stdout().flush().unwrap();
     let mut duration = String::new();
-    io::stdin().read_line(&mut duration).expect("Failed to read line");
+    io::stdin()
+        .read_line(&mut duration)
+        .expect("Failed to read line");
     let duration: u64 = duration.trim().parse().expect("Enter a valid number");
 
     let thread_count = num_cpus::get();
@@ -41,12 +53,7 @@ fn main() {
         let handle = thread::spawn(move || {
             println!("Thread {} starting", i);
             let mut child = Command::new("ping")
-                .arg("-6")
-                .arg("-f")
-                .arg("-i")
-                .arg("0.002")
-                .arg("-s")
-                .arg("1024")
+                .args(get_ping_args())
                 .arg(&link)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -101,7 +108,9 @@ fn main() {
                 println!("Thread {} stderr reader finished", i);
             });
 
-            while !stop_flag.load(Ordering::Relaxed) && start_time.elapsed() < Duration::from_secs(duration) {
+            while !stop_flag.load(Ordering::Relaxed)
+                && start_time.elapsed() < Duration::from_secs(duration)
+            {
                 thread::sleep(Duration::from_millis(100));
             }
 
